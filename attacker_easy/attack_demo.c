@@ -102,12 +102,13 @@ const unsigned short s_t[256] = {
 
 unsigned int compute() {
 	unsigned int a;
+	int i, j;
 
-	for (int i = 0; i < 4; i++) {
+	for (i = 0; i < 4; i++) {
 		memcpy(s_data + i * 512, s_t, 512);
 	}
 
-	for (int j = 0; j < 100; j++) {
+	for (j = 0; j < 100; j++) {
 		a ^= s_data[j*2];
 	}
 
