@@ -13,13 +13,13 @@ clean:
 	$(CC) -o $@ $^ $(LIBS)
 
 pmctest: PMCTestA.o PMCTestB.o
-	$(CPP) -O2 -m64 -o pmctest PMCTestA.o PMCTestB.o -lpthread
+	$(CPP) -g -m64 -o pmctest PMCTestA.o PMCTestB.o -lpthread
 
 PMCTestA.o: PMCTestA.cpp
-	$(CPP) -O2 -c -m64 -o PMCTestA.o PMCTestA.cpp -lpthread
+	$(CPP) -g -c -m64 -o PMCTestA.o PMCTestA.cpp -lpthread
 
 PMCTestB.o: PMCTestB.cpp
-	$(CPP) -O2 -c -m64 -o PMCTestB.o PMCTestB.cpp -lpthread
+	$(CPP) -g -c -m64 -o PMCTestB.o PMCTestB.cpp -lpthread
 
 %.o: %.c
 	$(CC) $(CFLAGS) -c  $<

@@ -56,8 +56,9 @@ unsigned int prime_single(size_t entry, const uint8_t *table, size_t tablesize){
  */
 unsigned int measure_pmc(size_t entry, const uint8_t *table, size_t tablesize){
 	local_hits_single = 0;
-		serialize();					//prevent out-of-order execution
-		pmc1= (int)readpmc(pmc_num);	//read PMC
+
+	serialize();					//prevent out-of-order execution
+	pmc1 = (int)readpmc(pmc_num);	//read PMC
 
 	__asm__ __volatile__(
 			"movq (%%rsi), %%rbx\n"
@@ -67,10 +68,10 @@ unsigned int measure_pmc(size_t entry, const uint8_t *table, size_t tablesize){
 			: /* clobber description */
 			"ebx", "ecx", "edx", "cc", "memory"
 		);
+	serialize();					// serialize again
 
-		serialize();					// serialize again
-		pmc2= (int)readpmc(pmc_num);
-		pmccount = pmc2-pmc1;
+	pmc2 = (int)readpmc(pmc_num);
+	pmccount = pmc2-pmc1;
 
 	return pmccount;
 }
@@ -96,15 +97,12 @@ unsigned int evict(const uint8_t *table, size_t tablesize, uint8_t *bitmap){
  * Check for evicted cacheline in all cache-sets.
  */
 unsigned int probe(size_t index) {
-	local_hits_sum = 0;
+	int result = 0;
 	for (table = 0; table < NUM_TABLES; table++) {
-		local_hits_sum += measure_pmc(index, (const uint8_t *) tables[table], TABLESIZE);
-	}
-	if (local_hits_sum > 0) {
-		return 1;
+		result += measure_pmc(index, (const uint8_t *) tables[table], TABLESIZE) << ((NUM_TABLES - 1 - table) * 4);
 	}
 		
-	return local_hits_sum;	
+	return result;	
 }
 
 /*
