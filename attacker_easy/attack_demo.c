@@ -237,7 +237,7 @@ const Ipp8u cipher[960] = {0x00, 0x00,0x00, 0x80, 0xe4, 0x2d, 0x80, 0x6e, 0x32, 
 
 Ipp8u pHash[16];
 
-Ipp8u pHKey[2*1024];
+Ipp8u pHKey[2*1024]  __attribute__ ((aligned (4096))) ;
 
 Ipp8u *pSrc;
 
@@ -251,30 +251,41 @@ void init() {
 	pHKey[1024+128+13] = 0x71;
 	pHKey[1024+128+14] = 0x74;
 	pHKey[1024+128+15] = 0x85;
-
-	memset(pHash, 0, 16);
 }
+
+int mask = 0;
 
 unsigned int auth() {
 	unsigned int a = 0;
 
+	Ipp8u tmp = 0;
+
 	int len = 960;
+	memset(pHash, 0, 16);
+	Ipp8u *src = pSrc;
+
+	/*
+	tmp ^= *(pHKey + 64 * 15);
+
+	if (mask == 0) {
+		mask == 1;
+		tmp ^= *(pHKey + 64 * 11);
+	} else {
+		mask == 0;
+		tmp ^= *(pHKey + 64 * 13);
+	}
+	*/
 
 	while(len>=BLOCK_SIZE) {
-      /* add src */
-      XorBlock16(pSrc, pHash, pHash);
-      /* hash it */
-      AesGcmMulGcm_table2K(pHash, pHKey);
+      XorBlock16(src, pHash, pHash);
+       AesGcmMulGcm_table2K(pHash, pHKey);
 
-      pSrc += BLOCK_SIZE;
+      src += BLOCK_SIZE;
       len -= BLOCK_SIZE;
    	}
 
-	// free(pSrc);
 	return a;
 }
-
-Ipp8u* pSrc;
 
 unsigned int compute() {
 	for (i = 0; i < 1; i++) {
@@ -317,8 +328,10 @@ static void enclave_thread(void) {
 	pthread_mutex_unlock(&lock);
 
 	// TODO CUSTEM CODE
+
+	init();
+
 	for(;;) {
-		init();
 		auth();
 	}
 }
@@ -413,12 +426,11 @@ int main(int argc,char **argv) {
 			// fill cache
 			prime();
 
-			// compute();
-			n++;
+			// auth();
 
 			// probe cache
 			evict_count[i] = probe(i);
-		}	
+		}
 
 		for(i = 0; i < (TABLESIZE/CACHELINESIZE); i++) {
 			if (evict_count[i] > 0)
