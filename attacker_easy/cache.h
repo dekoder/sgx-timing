@@ -8,6 +8,9 @@
 #define TABLESIZE 256*4
 #define NUM_TABLES 8
 
+#define ZU 4
+
+#define LEFT 13
 
 unsigned int measure_pmc(size_t, const uint8_t *, size_t);
 unsigned int prime_single(size_t, const uint8_t *, size_t);
@@ -17,6 +20,10 @@ unsigned int evict(const uint8_t *, size_t, uint8_t *);
  *	Fills all Cachlines for every cacheset
  */
 void prime(void);
+
+void my_prime(void);
+uint32_t my_probe();
+
 
 /* 
  * Checks for evicted cacheline in all cache-sets.

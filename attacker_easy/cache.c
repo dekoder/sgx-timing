@@ -99,7 +99,7 @@ unsigned int evict(const uint8_t *table, size_t tablesize, uint8_t *bitmap){
 unsigned int probe(size_t index) {
 	int result = 0;
 	for (table = 0; table < NUM_TABLES; table++) {
-		result += measure_pmc(index, (const uint8_t *) tables[table], TABLESIZE);
+		result += measure_pmc(index+LEFT, (const uint8_t *) tables[table], TABLESIZE);
 	}
 		
 	return result;	
@@ -109,11 +109,20 @@ unsigned int probe(size_t index) {
  * Fill all cache-lines in every cache-set.
  */
 void prime(void) {
-	for (round = 0; round < 10; round++){
+	for (round = 0; round < 1; round++){
 			for (table = 0; table < NUM_TABLES; table++) {
 				for (i = 0; i < TABLESIZE/CACHELINESIZE; i++) {
 					prime_single(i, (const uint8_t *) tables[table], TABLESIZE);
 				}
 			}
+	}
+}
+
+void my_prime(void) {
+	for (table = 0; table < NUM_TABLES; table++) {
+		prime_single(0+LEFT, (const uint8_t *) tables[table], TABLESIZE);
+		prime_single(1+LEFT, (const uint8_t *) tables[table], TABLESIZE);
+		prime_single(2+LEFT, (const uint8_t *) tables[table], TABLESIZE);
+		prime_single(3+LEFT, (const uint8_t *) tables[table], TABLESIZE);
 	}
 }
