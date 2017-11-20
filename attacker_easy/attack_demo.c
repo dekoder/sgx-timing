@@ -315,17 +315,6 @@ static void enclave_thread(void) {
 
 	fprintf(stderr, "[Enclave] Enclave running on %d\n", sched_getcpu());
 	pthread_mutex_unlock(&lock);
-
-	thread_done = 1;
-
-	while(!prime_start);
-
-	init();
-	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &i3);
-	auth();
-	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &i4);
-	printf("auth times sub: %ld\n", i4.tv_nsec - i3.tv_nsec);
-
 }
 
 /*
@@ -396,6 +385,8 @@ void four_bit_test() {
 	fprintf(stderr, "\n%d\n", tmp_code);
 }
 
+static const uint8_t faddrs[8][64][64] __attribute__ ((aligned (4096)));
+
 void one_bit_test() {
 	int repeat = 0;
 	int table;
@@ -408,26 +399,25 @@ void one_bit_test() {
 	uint32_t count[TIMES];
 	memset(count, 0x0, 4*TIMES);
 
-	while (!thread_done);
-
 	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &i1);
-
-	prime_start = 1;
 
 	for (;repeat < TIMES; repeat++) {
 
 		// fill cache
 		for (table = 0; table < NUM_TABLES; table++) {
-			prime_single(LEFT_ONE, (const uint8_t *) tables[table], TABLESIZE);
+			faddrs[table][LEFT_ONE][0];
 		}
 
-		// auth();
 		// tmp_code = (uint32_t) * (pHKey + 64*LEFT_ONE);
+
+		serialize();					//prevent out-of-order execution
 
 		// probe cache
 		for (table = 0; table < NUM_TABLES; table++) {
 			result += measure_pmc(LEFT_ONE, (const uint8_t *) tables[table], TABLESIZE);
 		}
+
+		serialize();					//prevent out-of-order execution
 
 		count[repeat] = result;
 	}

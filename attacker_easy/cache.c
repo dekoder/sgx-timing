@@ -18,7 +18,7 @@ static const int pmc_num = 0x00000001;	   //program monitor counter number for L
 /*
  * Force cpu to serialize instructions
  */
-static inline void serialize () {
+void serialize () {
 	__asm __volatile__ ("cpuid" : : "a"(0) : "ebx", "ecx", "edx" );  // serialize
 }
 
@@ -57,7 +57,6 @@ unsigned int prime_single(size_t entry, const uint8_t *table, size_t tablesize){
 unsigned int measure_pmc(size_t entry, const uint8_t *table, size_t tablesize){
 	local_hits_single = 0;
 
-	serialize();					//prevent out-of-order execution
 	pmc1 = (int)readpmc(pmc_num);	//read PMC
 
 	__asm__ __volatile__(
@@ -68,7 +67,6 @@ unsigned int measure_pmc(size_t entry, const uint8_t *table, size_t tablesize){
 			: /* clobber description */
 			"ebx", "ecx", "edx", "cc", "memory"
 		);
-	serialize();					// serialize again
 
 	pmc2 = (int)readpmc(pmc_num);
 	pmccount = pmc2-pmc1;
@@ -98,10 +96,11 @@ unsigned int evict(const uint8_t *table, size_t tablesize, uint8_t *bitmap){
  */
 unsigned int probe(size_t index) {
 	int result = 0;
+	
 	for (table = 0; table < NUM_TABLES; table++) {
 		result += measure_pmc(index+LEFT, (const uint8_t *) tables[table], TABLESIZE);
 	}
-		
+
 	return result;	
 }
 
@@ -125,4 +124,18 @@ void my_prime(void) {
 		prime_single(2+LEFT, (const uint8_t *) tables[table], TABLESIZE);
 		prime_single(3+LEFT, (const uint8_t *) tables[table], TABLESIZE);
 	}
+}
+
+void one_bit_prime(int left) {
+	for (table = 0; table < NUM_TABLES; table++) {
+		prime_single(left, (const uint8_t *) tables[table], TABLESIZE);
+	}
+}
+
+uint32_t one_bit_probe(int left) {
+	int result = 0;
+	for (table = 0; table < NUM_TABLES; table++) {
+		result += measure_pmc(left, (const uint8_t *) tables[table], TABLESIZE);
+	}	
+	return result;
 }

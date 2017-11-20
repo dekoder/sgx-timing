@@ -24,6 +24,8 @@ void prime(void);
 void my_prime(void);
 uint32_t my_probe();
 
+void serialize();
+
 
 /* 
  * Checks for evicted cacheline in all cache-sets.
