@@ -11,8 +11,8 @@ static size_t round, table;
 static size_t i, j;
 static uint32_t t1, t2, mean;
 static unsigned int local_hits_single, local_hits_sum;
-static int pmccount;
-static int pmc1, pmc2;	   //counter values before and after each test
+static uint32_t pmccount;
+static uint32_t pmc1, pmc2;	   //counter values before and after each test
 static const int pmc_num = 0x00000001;	   //program monitor counter number for L1-Misses
 
 /*
@@ -98,7 +98,7 @@ unsigned int probe(size_t index) {
 	int result = 0;
 	
 	for (table = 0; table < NUM_TABLES; table++) {
-		result += measure_pmc(index+LEFT, (const uint8_t *) tables[table], TABLESIZE);
+		result += measure_pmc(index, (const uint8_t *) tables[table], TABLESIZE) << ((NUM_TABLES - 1 - table) * 4);
 	}
 
 	return result;	
@@ -117,25 +117,236 @@ void prime(void) {
 	}
 }
 
-void my_prime(void) {
+
+uint32_t my_measure_pmc(uint8_t *table){
+	local_hits_single = 0;
+
+	serialize();					//prevent out-of-order execution
+	pmc1 = (int)readpmc(pmc_num);	//read PMC
+
+	__asm__ __volatile__(
+			"movq (%%rsi), %%rbx\n"
+			: /* output operands */
+			: /* input operands */
+			"S" (table)
+			: /* clobber description */
+			"ebx", "ecx", "edx", "cc", "memory"
+		);
+	serialize();					// serialize again
+
+	pmc2 = (int)readpmc(pmc_num);
+	pmccount = pmc2-pmc1;
+
+	return pmccount;
+}
+
+/*
+void my_prime_() {
+	volatile register int table, i;
 	for (table = 0; table < NUM_TABLES; table++) {
-		prime_single(0+LEFT, (const uint8_t *) tables[table], TABLESIZE);
-		prime_single(1+LEFT, (const uint8_t *) tables[table], TABLESIZE);
-		prime_single(2+LEFT, (const uint8_t *) tables[table], TABLESIZE);
-		prime_single(3+LEFT, (const uint8_t *) tables[table], TABLESIZE);
+		for (i = 0; i < TABLESIZE/CACHELINESIZE; i++) {
+			faddrs[table*4096+i*64];
+		}
 	}
 }
 
-void one_bit_prime(int left) {
-	for (table = 0; table < NUM_TABLES; table++) {
-		prime_single(left, (const uint8_t *) tables[table], TABLESIZE);
-	}
-}
 
-uint32_t one_bit_probe(int left) {
+uint32_t my_probe_(size_t index) {
+	uint32_t result = 0;
+	for (table = 0; table < NUM_TABLES; table++) {
+		result += my_measure_pmc(faddrs+table*4096+i*64) << ((NUM_TABLES - 1 - table) * 4);
+	}
+		
+	return result;	
+}
+*/
+
+/*
+ * Check for evicted cacheline in all cache-sets.
+ */
+unsigned int my_probe(size_t index) {
 	int result = 0;
 	for (table = 0; table < NUM_TABLES; table++) {
-		result += measure_pmc(left, (const uint8_t *) tables[table], TABLESIZE);
-	}	
+		result += my_measure_pmc(addr + (table << 12) + (index << 6)) << ((NUM_TABLES - 1 - table) * 4);
+	}
+		
+	return result;	
+}
+
+unsigned int my_asm_probe(size_t index) {
+	int result = 0;
+
+				__asm__ __volatile__(
+							"xor %%r8, %%r8\n" // i = 0
+							"1:\n"
+							"cmp $7, %%r8\n" // i <= 7
+							"jg 4f\n"
+
+							"movl %%r8d, %%esi\n"
+							"movl %k2, %%edi\n"
+							"shl $12, %%esi\n" 	// table * 4096
+							"shl $6, %%edi\n" 	// index * 64
+							"addl %%edi, %%esi\n"
+							"leaq (%%rsi,%1,), %%rsi\n" // %rsi = faddrs + table * 4096 + index * 64
+
+							"movl $1, %%ecx\n"
+							"rdpmc\n"
+
+							"movq (%%rsi), %%rsi\n" // rsi = addr_value
+
+							"movl %%eax, %%esi\n"	// esi = pmc1
+
+							"movl $1, %%ecx\n"
+							"rdpmc\n"				// eax = pmc2
+
+							"subl %%esi, %%eax\n"
+							"addl %%eax, %k0\n"		// result += pmc2 - pmc1
+
+							"inc %%r8\n"			// i++
+							"jmp 1b\n"
+							"4:\n"
+							: // output operands
+							"+r" (result)
+							: // input operands 
+							"r" (faddrs),
+							"r" (index)
+							: // clobber description
+							"r8", "rax", "rcx", "rdx", "rsi", "rdi"
+				);
+
+	//printf("%x\n", result);
+
+				/*
+	for (table = 0; table < NUM_TABLES; table++) {
+		result += my_measure_pmc(addr + (table << 12) + (index << 6)) << ((NUM_TABLES - 1 - table) * 4);
+	}
+	*/
+		
 	return result;
+}
+
+/*
+ * Fill all cache-lines in every cache-set.
+ */
+
+void my_prime(void) {
+			__asm__ __volatile__(
+							"xor %%rax, %%rax\n"
+							"1:\n"
+							"cmp $7, %%rax\n"
+							"jg 4f\n"
+							"xor %%rbx, %%rbx\n"
+							"2:\n"
+							"cmp $16, %%rbx\n"
+							"jg 3f\n"
+							"movl %%eax, %%esi\n"
+							"movl %%ebx, %%edi\n"
+							"shl $12, %%esi\n"
+							"shl $6, %%edi\n"
+							"addl %%edi, %%esi\n"
+							"leaq (%%rsi,%0,), %%rsi\n"
+							"movq (%%rsi), %%rsi\n"
+							"inc %%rbx\n"
+							"jmp 2b\n"
+							"3:\n"
+							"inc %%rax\n"
+							"jmp 1b\n"
+							"4:\n"
+							: // output operands
+							: // input operands 
+							"r" (faddrs)
+							: // clobber description
+							"rax", "rbx", "rsi", "rdi"
+				);
+}
+
+void my_prime_i(size_t index) {
+			__asm__ __volatile__(
+							"xor %%rax, %%rax\n"	// i = 0
+							"1:\n"
+
+							"cmp $7, %%rax\n"		// i > 7
+							"jg 2f\n"
+
+							"movl %k1, %%edi\n"		// edi = index
+
+							"movl %%eax, %%esi\n"	// esi = i
+							"shl $12, %%esi\n"		// i = i*4096
+							"shl $6, %%edi\n"		// index*64
+							"addl %%edi, %%esi\n"	// = index*64+i*4096
+							"leaq (%%rsi,%0,), %%rsi\n"
+							"movq (%%rsi), %%rsi\n"	// visit faddrs+x
+
+							"inc %%rax\n"			// i++
+							"jmp 1b\n"
+							"2:\n"
+
+							: // output operands
+							: // input operands 
+							"r" (faddrs),
+							"r" (index)
+							: // clobber description
+							"rax", "rsi", "rdi"
+				);
+}
+
+void my_prime_four(size_t index) {
+			__asm__ __volatile__(
+							"xor %%rax, %%rax\n"	// i = 0
+							"1:\n"
+
+							"cmp $7, %%rax\n"		// i > 7
+							"jg 2f\n"
+
+							"movl %k1, %%edi\n"		// edi = index
+
+							"movl %%eax, %%esi\n"	// esi = i
+							"shl $12, %%esi\n"		// i = i*4096
+							"shl $6, %%edi\n"		// index*64
+							"addl %%edi, %%esi\n"	// = index*64+i*4096
+							"leaq (%%rsi,%0,), %%rsi\n"
+							"movq (%%rsi), %%rsi\n"	// visit faddrs+x
+
+							"inc %%rax\n"			// i++
+							"jmp 1b\n"
+							"2:\n"
+
+							: // output operands
+							: // input operands 
+							"r" (faddrs),
+							"r" (index)
+							: // clobber description
+							"rax", "rbx", "rsi", "rdi"
+				);
+}
+
+void my_prime_rt(void) {
+			__asm__ __volatile__(
+							"xor %%r8, %%r8\n"
+							"1:\n"
+							"cmp $7, %%r8\n"
+							"jg 4f\n"
+							"xor %%r9, %%r9\n"
+							"2:\n"
+							"cmp $16, %%r9\n"
+							"jg 3f\n"
+							"movl %%r8d, %%r10d\n"
+							"movl %%r9d, %%r11d\n"
+							"shl $12, %%r10d\n"
+							"shl $6, %%r11d\n"
+							"addl %%r11d, %%r10d\n"
+							"leaq (%%r10,%0,), %%r10\n"
+							"movq (%%r10), %%r10\n"
+							"inc %%r9\n"
+							"jmp 2b\n"
+							"3:\n"
+							"inc %%r8\n"
+							"jmp 1b\n"
+							"4:\n"
+							: // output operands
+							: // input operands 
+							"r" (faddrs)
+							: // clobber description
+							"r8", "r9", "r10", "r11"
+				);
 }
