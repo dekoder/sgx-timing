@@ -261,6 +261,66 @@ void my_prime(void) {
 				);
 }
 
+void my_prime_i(size_t index) {
+			__asm__ __volatile__(
+							"xor %%rax, %%rax\n"	// i = 0
+							"1:\n"
+
+							"cmp $7, %%rax\n"		// i > 7
+							"jg 2f\n"
+
+							"movl %k1, %%edi\n"		// edi = index
+
+							"movl %%eax, %%esi\n"	// esi = i
+							"shl $12, %%esi\n"		// i = i*4096
+							"shl $6, %%edi\n"		// index*64
+							"addl %%edi, %%esi\n"	// = index*64+i*4096
+							"leaq (%%rsi,%0,), %%rsi\n"
+							"movq (%%rsi), %%rsi\n"	// visit faddrs+x
+
+							"inc %%rax\n"			// i++
+							"jmp 1b\n"
+							"2:\n"
+
+							: // output operands
+							: // input operands 
+							"r" (faddrs),
+							"r" (index)
+							: // clobber description
+							"rax", "rsi", "rdi"
+				);
+}
+
+void my_prime_four(size_t index) {
+			__asm__ __volatile__(
+							"xor %%rax, %%rax\n"	// i = 0
+							"1:\n"
+
+							"cmp $7, %%rax\n"		// i > 7
+							"jg 2f\n"
+
+							"movl %k1, %%edi\n"		// edi = index
+
+							"movl %%eax, %%esi\n"	// esi = i
+							"shl $12, %%esi\n"		// i = i*4096
+							"shl $6, %%edi\n"		// index*64
+							"addl %%edi, %%esi\n"	// = index*64+i*4096
+							"leaq (%%rsi,%0,), %%rsi\n"
+							"movq (%%rsi), %%rsi\n"	// visit faddrs+x
+
+							"inc %%rax\n"			// i++
+							"jmp 1b\n"
+							"2:\n"
+
+							: // output operands
+							: // input operands 
+							"r" (faddrs),
+							"r" (index)
+							: // clobber description
+							"rax", "rbx", "rsi", "rdi"
+				);
+}
+
 void my_prime_rt(void) {
 			__asm__ __volatile__(
 							"xor %%r8, %%r8\n"

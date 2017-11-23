@@ -18,6 +18,7 @@ unsigned int evict(const uint8_t *, size_t, uint8_t *);
  */
 void prime(void);
 void my_prime(void);
+void my_prime_i(size_t);
 unsigned int my_probe(size_t);
 unsigned int my_asm_probe(size_t);
 
